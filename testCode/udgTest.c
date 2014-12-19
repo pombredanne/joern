@@ -58,9 +58,44 @@ int condition_test()
   if(z) return 1;
 }
 
+int conditional_expr()
+{
+  int x = foo? bar: 0;
+}
+
 int test_buf_def()
 {
-  // We need to improve pointer tracking here:
-  // Currently, it's USE(buf), DEF(buf)
   buf[i] = x;
+}
+
+int arrUse()
+{
+  x = arr[i];
+}
+
+int complexInArgs()
+{
+  return foo( pLtv->u.u16 );
+}
+
+
+int complexAssign()
+{
+  pLtv->u.u16 = 1;
+  return 0;
+}
+
+int plusplus()
+{
+  a ++;
+}
+
+int callWithRef()
+{
+  fooBar(&bar);
+}
+
+int nonDerefUnary()
+{
+  x = ++ a;
 }

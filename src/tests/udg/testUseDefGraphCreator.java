@@ -1,78 +1,70 @@
 package tests.udg;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertTrue;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+import org.junit.Before;
 import org.junit.Test;
-import org.neo4j.graphdb.index.IndexHits;
 
-import output.neo4j.batchInserter.QueryUtils;
 import tests.TestDBTestsBatchInserter;
-import tools.udg.UseDefGraph;
-import tools.udg.UseDefGraphCreator;
-import tools.udg.UseOrDefRecord;
+import udg.CFGToUDGConverter;
+import udg.useDefGraph.UseDefGraph;
+import udg.useDefGraph.UseOrDefRecord;
+import cfg.ASTToCFGConverter;
+import cfg.CFG;
 
-public class testUseDefGraphCreator extends TestDBTestsBatchInserter {
+public class testUseDefGraphCreator extends TestDBTestsBatchInserter
+{
 
-	
-	@Test
-	public void testSimpleDecl()
+	ASTToCFGConverter astToCFG;
+	CFGToUDGConverter cfgToUDG;
+
+	private static final Map<String, String> functionMap;
+	static
 	{
-		UseDefGraph useDefGraph = createUDGForFunction("udg_test_simple_decl");		
-		assertOnlyDefForXFound(useDefGraph, "x");
+		Map<String, String> aMap = new HashMap<String, String>();
+		
+		aMap.put("condition_test",
+				"int condition_test() { if(x && y) return 0; if(z) return 1; }");
+		aMap.put("udg_test_def_tainted_call", "int f(){foo(x);}");
+		aMap.put("plusEqualsUse", "int f(){ x += y; }");
+		aMap.put(
+				"ddg_test_struct",
+				"int ddg_test_struct(){ struct my_struct foo; foo.bar = 10; copy_somehwere(foo); }");
+
+		functionMap = aMap;
 	}
 
-	@Test
-	public void testDeclWithAssignment()
+	@Before
+	public void init()
 	{
-		UseDefGraph useDefGraph = createUDGForFunction("udg_test_decl_with_assign");		
-		assertOnlyDefForXFound(useDefGraph, "x");
+		astToCFG = new ASTToCFGConverter();
+		cfgToUDG = new CFGToUDGConverter();
 	}
-	
-	@Test
-	public void testParamDecl()
-	{
-		UseDefGraph useDefGraph = createUDGForFunction("udg_test_param_decl");		
-		assertOnlyDefForXFound(useDefGraph, "x");
-	}
-	
-	@Test
-	public void test_use_untainted_call()
-	{
-		UseDefGraph useDefGraph = createUDGForFunction("udg_test_use_untainted_call");
-		assertOnlyUseForXFound(useDefGraph, "x");
-	}
-	
-	@Test
-	public void test_struct_field_use()
-	{
-		UseDefGraph useDefGraph = createUDGForFunction("udg_test_struct_field_use");
-		assertOnlyUseForXFound(useDefGraph, "x . y");
-		assertOnlyUseForXFound(useDefGraph, "x");
-	}
-	
+
 	@Test
 	public void test_struct_field_assign_def()
 	{
 		UseDefGraph useDefGraph = createUDGForFunction("ddg_test_struct");
 		assertOnlyDefForXFound(useDefGraph, "foo . bar");
 	}
-	
-	
+
 	@Test
 	public void test_def_tainted_call()
 	{
-		IndexHits<Long> hits = QueryUtils.getFunctionsByName("udg_test_def_tainted_call");
-		long functionId = hits.next();
-		
-		UseDefGraphCreator creator = new UseDefGraphCreator();
-		creator.addTaintSource("foo", 0);
-		
-		UseDefGraph useDefGraph = creator.create(functionId);
+		String code = functionMap.get("udg_test_def_tainted_call");
+		CFG cfg = getCFGForCode(code);
+		CFGToUDGConverter myCFGToUDG = new CFGToUDGConverter();
+		myCFGToUDG.addTaintSource("foo", 0);
+		UseDefGraph useDefGraph = myCFGToUDG.convert(cfg);
+
+		assertOnlyDefForXFound(useDefGraph, "* x");
 		assertDefAndUseForXFound(useDefGraph, "x");
 	}
-	
+
 	@Test
 	public void test_plusEquals_asssignment()
 	{
@@ -80,7 +72,7 @@ public class testUseDefGraphCreator extends TestDBTestsBatchInserter {
 		assertDefAndUseForXFound(useDefGraph, "x");
 		assertOnlyUseForXFound(useDefGraph, "y");
 	}
-	
+
 	@Test
 	public void test_condition()
 	{
@@ -89,71 +81,68 @@ public class testUseDefGraphCreator extends TestDBTestsBatchInserter {
 		assertOnlyUseForXFound(useDefGraph, "y");
 		assertOnlyUseForXFound(useDefGraph, "z");
 	}
-	
-	@Test
-	public void test_buf_def()
-	{
-		UseDefGraph useDefGraph = createUDGForFunction("test_buf_def");
-		// this, we want to improve. It should be DEF(*x) and USE(x),
-		// right now, it's just DEF(x).
-		assertOnlyDefForXFound(useDefGraph, "buf"); 
-		assertOnlyUseForXFound(useDefGraph, "i");
-	}
-	
-	
+
+
 	private UseDefGraph createUDGForFunction(String functionName)
 	{
-		IndexHits<Long> hits = QueryUtils.getFunctionsByName(functionName);
-		long functionId = hits.next();
-		
-		UseDefGraphCreator creator = new UseDefGraphCreator();
-		return creator.create(functionId);
+		String code = functionMap.get(functionName);
+		CFG cfg = getCFGForCode(code);
+		return cfgToUDG.convert(cfg);
 	}
-	
-	
-	
+
+	public CFG getCFGForCode(String input)
+	{
+		CFGCreator cfgCreator = new CFGCreator();
+		return cfgCreator.getCFGForCode(input);
+	}
+
 	private void assertOnlyDefForXFound(UseDefGraph useDefGraph, String symbol)
 	{
-		List<Object> usesAndDefs = useDefGraph.getUsesAndDefsForSymbol(symbol);
+		List<UseOrDefRecord> usesAndDefs = useDefGraph
+				.getUsesAndDefsForSymbol(symbol);
 		assertTrue(usesAndDefs != null);
 		assertTrue(usesAndDefs.size() > 0);
-		
+
 		// make sure only 'uses' of x exist
-		for( Object u : usesAndDefs){
-			UseOrDefRecord r = (UseOrDefRecord) u;
-			assertTrue(r.isDef);
+		for (UseOrDefRecord r : usesAndDefs)
+		{
+			assertTrue(r.isDef());
 		}
 	}
 
 	private void assertOnlyUseForXFound(UseDefGraph useDefGraph, String symbol)
 	{
-		List<Object> usesAndDefs = useDefGraph.getUsesAndDefsForSymbol(symbol);
+		List<UseOrDefRecord> usesAndDefs = useDefGraph
+				.getUsesAndDefsForSymbol(symbol);
 		assertTrue(usesAndDefs != null);
 		assertTrue(usesAndDefs.size() > 0);
-		
+
 		// make sure only 'uses' of x exist
-		for( Object u : usesAndDefs){
-			UseOrDefRecord r = (UseOrDefRecord) u;
-			assertTrue(!r.isDef);
+		for (UseOrDefRecord r : usesAndDefs)
+		{
+			assertTrue(!r.isDef());
 		}
 	}
-	
-	private void assertDefAndUseForXFound(UseDefGraph useDefGraph, String symbol) {
-		
-		List<Object> usesAndDefs = useDefGraph.getUsesAndDefsForSymbol(symbol);
+
+	private void assertDefAndUseForXFound(UseDefGraph useDefGraph, String symbol)
+	{
+
+		List<UseOrDefRecord> usesAndDefs = useDefGraph
+				.getUsesAndDefsForSymbol(symbol);
 		assertTrue(usesAndDefs != null);
 		assertTrue(usesAndDefs.size() > 0);
-		
+
 		boolean isDefined = false, isUsed = false;
-		
+
 		// make sure only 'definitions' of x exist
-		for( Object u : usesAndDefs){
-			UseOrDefRecord r = (UseOrDefRecord) u;
-			if(r.isDef) isDefined = true;
-			
-			if(!r.isDef) isUsed = true;
+		for (UseOrDefRecord r : usesAndDefs)
+		{
+			if (r.isDef())
+				isDefined = true;
+			if (!r.isDef())
+				isUsed = true;
 		}
-	
+
 		assertTrue(isDefined);
 		assertTrue(isUsed);
 	}
